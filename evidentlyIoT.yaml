@@ -1,0 +1,261 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to demonstrate AWS IoT integration with Amazon CloudWatch Evidently.
+
+Parameters:
+  thingName:
+    Description: Naming suffix of the AWS IoT Core device
+    Type: String
+    Default: myDevice
+  variantModelBaseline:
+    Description: Name of the Amazon CloudWatch Evidently experiment baseline model
+    Type: String
+    Default: 'ModelBaseline'
+  variantModelVariantA:
+    Description: Name of the Amazon CloudWatch Evidently experiment Variant A
+    Type: String
+    Default: 'ModelVariantA'
+  variantModelVariantB:
+    Description: Name of the Amazon CloudWatch Evidently experiment Variant B
+    Type: String
+    Default: 'ModelVariantB'
+
+Resources:
+  myEvidentlyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '${AWS::StackName}-myEvidentlyLogGroup'
+      RetentionInDays: 7
+  myEvidentlyProject:
+    Type: AWS::Evidently::Project
+    Properties:
+      Description: 'CloudWatch Evidently project'
+      Name: !Sub '${AWS::StackName}-myEvidentlyProject'
+      DataDelivery:
+        LogGroup: !Ref myEvidentlyLogGroup
+
+  myEvidentlyFeature:
+    Type: AWS::Evidently::Feature
+    Properties:
+      DefaultVariation: !Sub '${AWS::StackName}-myEvidentlyFeature-${variantModelBaseline}'
+      Description: 'CloudWatch Evidently feature'
+      Name: !Sub '${AWS::StackName}-myEvidentlyFeature'
+      Project: !Ref myEvidentlyProject
+      Variations:
+        - StringValue: !Sub ${variantModelBaseline}
+          VariationName: !Sub '${AWS::StackName}-myEvidentlyFeature-${variantModelBaseline}'
+        - StringValue: !Sub ${variantModelVariantA}
+          VariationName: !Sub '${AWS::StackName}-myEvidentlyFeature-${variantModelVariantA}'
+        - StringValue: !Sub ${variantModelVariantB}
+          VariationName: !Sub '${AWS::StackName}-myEvidentlyFeature-${variantModelVariantB}'
+
+  myEvidentlyExperiment:
+    Type: AWS::Evidently::Experiment
+    Properties:
+      Description: 'CloudWatch Evidently experiment'
+      MetricGoals:
+        - DesiredChange: 'DECREASE'
+          EntityIdKey: 'thingDetails.thingName'
+          MetricName: !Sub '${AWS::StackName}-myEvidentlyExperiment-myMetric'
+          ValueKey: 'thingDetails.myMetric'
+          EventPattern: '{"thingDetails.thingName": [{"exists": true}],"thingDetails.myMetric": [{"exists": true}]}'
+      Name: !Sub '${AWS::StackName}-myEvidentlyExperiment'
+      OnlineAbConfig:
+        ControlTreatmentName: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelBaseline}'
+        TreatmentWeights:
+          - Treatment: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelBaseline}'
+            SplitWeight: 33334
+          - Treatment: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelVariantA}'
+            SplitWeight: 33333
+          - Treatment: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelVariantB}'
+            SplitWeight: 33333
+      Project: !Ref myEvidentlyProject
+      Treatments:
+        - Description: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelBaseline}'
+          Feature: !Sub '${AWS::StackName}-myEvidentlyFeature'
+          TreatmentName: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelBaseline}'
+          Variation: !Sub '${AWS::StackName}-myEvidentlyFeature-${variantModelBaseline}'
+        - Description: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelVariantA}'
+          Feature: !Sub '${AWS::StackName}-myEvidentlyFeature'
+          TreatmentName: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelVariantA}'
+          Variation: !Sub '${AWS::StackName}-myEvidentlyFeature-${variantModelVariantA}'
+        - Description: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelVariantB}'
+          Feature: !Sub '${AWS::StackName}-myEvidentlyFeature'
+          TreatmentName: !Sub '${AWS::StackName}-myEvidentlyTreatment-${variantModelVariantB}'
+          Variation: !Sub '${AWS::StackName}-myEvidentlyFeature-${variantModelVariantB}'
+
+  myEvidentlyLambdaFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-myEvidentlyLambdaFunction'
+      RetentionInDays: 7
+
+  myEvidentlyLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: myEvidentlyLambdaFunctionLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-myEvidentlyLambdaFunction'
+      Description: 'AWS Lambda function to integrate AWS IoT with Amazon CloudWatch Evidently'
+      Architectures:
+        - arm64
+      Runtime: python3.9
+      Handler: 'index.lambda_handler'
+      Code:
+        ZipFile: |
+          """ AWS IoT Core to Amazon CloudWatch Evidently integration """
+  
+          import os
+          import json
+          from datetime import datetime
+          import boto3
+          
+          client_iot = boto3.client('iot-data')
+          client_evidently = boto3.client('evidently')
+          EVIDENTLY_PROJECT = os.environ['EVIDENTLY_PROJECT']
+          EVIDENTLY_FEATURE = os.environ['EVIDENTLY_FEATURE']
+          DEVICE_SHADOW_NAME = os.environ['DEVICE_SHADOW_NAME']
+  
+  
+          def lambda_handler(event, context):
+              """ Lambda handler for AWS IoT Core to Amazon CloudWatch Evidently integration """
+              thing_name = event['thingName']
+              # Put custom metric to Evidently
+              data = {'thingDetails': {'thingName': thing_name, 'myMetric': event['myMetric']}}
+              response = client_evidently.put_project_events(
+                  events=[
+                      {
+                          'data': json.dumps(data),
+                          'timestamp': datetime.now(),
+                          'type': 'aws.evidently.custom'
+                      }
+                  ],
+                  project=EVIDENTLY_PROJECT
+              )
+          
+              # Retrieve assigned feature flag value from Evidently
+              feature_flag = client_evidently.evaluate_feature(
+                  entityId=thing_name,
+                  project=EVIDENTLY_PROJECT,
+                  feature=EVIDENTLY_FEATURE
+              )['value']['stringValue']
+          
+              # Update named shadow of thing with reported and desired feature flag values
+              response = client_iot.update_thing_shadow(
+                  thingName=thing_name,
+                  shadowName=DEVICE_SHADOW_NAME,
+                  payload=json.dumps(
+                      {
+                          'state': {
+                              'desired': {'myFeature': feature_flag},
+                              'reported': {'myFeature': event['myFeature']}
+                          }
+                      }
+                  )
+              )
+              print(json.loads(response['payload'].read()))
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(feature_flag)
+              }
+
+      MemorySize: 128
+      Timeout: 10
+      Role: !GetAtt myEvidentlyLambdaFunctionExecutionRole.Arn
+      Environment:
+        Variables:
+          DEVICE_SHADOW_NAME: 'myFeatures'
+          EVIDENTLY_FEATURE: !Sub '${AWS::StackName}-myEvidentlyFeature'
+          EVIDENTLY_PROJECT: !Sub '${AWS::StackName}-myEvidentlyProject'
+
+  myEvidentlyLambdaFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref myEvidentlyLambdaFunction
+      Principal: 'iot.amazonaws.com'
+      SourceArn: !GetAtt myEvidentlyIoTRule.Arn
+
+  myEvidentlyLambdaFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-myEvidentlyLambdaFunctionRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-myEvidentlyLambdaFunctionPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-myEvidentlyLambdaFunction:*'
+              - Effect: Allow
+                Action:
+                  - evidently:PutProjectEvents
+                  - evidently:EvaluateFeature
+                Resource:
+                  - !Ref myEvidentlyFeature
+                  - !Ref myEvidentlyProject
+              - Effect: Allow
+                Action:
+                  - iot:UpdateThingShadow
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:thing/${AWS::StackName}-EvidentlyIoT-${thingName}*'
+
+  myEvidentlyIoTRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub '${AWS::StackName}myEvidentlyEvidentlyIoTRule'
+      TopicRulePayload:
+        Description: 'AWS IoT Core rule for Evidently integration'
+        Sql: !Sub 'SELECT *, topic(2) as thingName FROM "${AWS::StackName}/+/myFeatures"'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt myEvidentlyLambdaFunction.Arn
+
+  myEvidentlyIoTThing:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Sub '${AWS::StackName}-EvidentlyIoT-${thingName}'
+
+Outputs:
+  outputSubscribeToThisTopic:
+    Description: MQTT topic for the devices to subscribe to. Substitute + with the device name.
+    Value: '$aws/things/+/shadow/name/myFeatures/update/accepted'
+  outputPublishToThisTopic:
+    Description: MQTT topic for the devices to publish to. Substitute + with the device name.
+    Value: !Sub '${AWS::StackName}/+/myFeatures'
+  outputThingName:
+    Description: Thing name prefix used for devices.
+    Value: !Sub '${AWS::StackName}-EvidentlyIoT-${thingName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-EvidentlyIoT-ThingName'
+  outputVariantModelBaseline:
+    Description: String value used to identify baseline variant in load generator Lambda.
+    Value: !Sub '${variantModelBaseline}'
+    Export: 
+      Name: !Sub '${AWS::StackName}-EvidentlyIoT-VariantModelBaseline'
+  outputVariantModelVariantA:
+    Description: String value used to identify variant A in load generator Lambda.
+    Value: !Sub '${variantModelVariantA}'
+    Export: 
+      Name: !Sub '${AWS::StackName}-EvidentlyIoT-VariantModelVariantA'
+  outputVariantModelVariantB:
+    Description: String value used to identify variant B in load generator Lambda.
+    Value: !Sub '${variantModelVariantB}'
+    Export: 
+      Name: !Sub '${AWS::StackName}-EvidentlyIoT-VariantModelVariantB'

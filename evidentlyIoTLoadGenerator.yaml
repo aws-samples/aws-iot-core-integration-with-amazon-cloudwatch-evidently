@@ -1,0 +1,557 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to generate load to demo AWS IoT integration with Amazon CloudWatch Evidently.
+
+Parameters:
+  stackName:
+    Description: Provide the existing stack name used for the AWS IoT Core and Amazon CloudWatch Evidently solution.
+    Type: String
+  deviceCount:
+    Description: Number of devices to use in the load generator.
+    Type: Number
+    Default: 50
+    MaxValue: 50
+
+Resources:
+  myEvidentlyLoadGenLambdaFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-myEvidentlyLoadGenLambdaFunction'
+      RetentionInDays: 7
+
+  myEvidentlyLoadGenLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: myEvidentlyLoadGenLambdaFunctionLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-myEvidentlyLoadGenLambdaFunction'
+      Description: 'AWS Lambda function to generate load.'
+      Architectures:
+        - arm64
+      Runtime: python3.9
+      Handler: 'index.lambda_handler'
+      Code:
+        ZipFile: |
+          """
+          Load generator for AWS IoT Core to Amazon CloudWatch Evidently integration
+          """
+          
+          import os
+          import json
+          import random
+          import boto3
+          
+          client_iot = boto3.client('iot-data')
+          THING_NAME = os.environ['THING_NAME']
+          DEVICE_COUNT = int(os.environ['DEVICE_COUNT'])
+          DEVICE_SHADOW_NAME = os.environ['DEVICE_SHADOW_NAME']
+          CFN_STACK = os.environ['CFN_STACK']
+          VARIANT_MODEL_BASELINE = os.environ['VARIANT_MODEL_BASELINE']
+          VARIANT_MODEL_VARIANT_A = os.environ['VARIANT_MODEL_VARIANT_A']
+          VARIANT_MODEL_VARIANT_B = os.environ['VARIANT_MODEL_VARIANT_B']
+          
+          
+          def generate_random_metric(feature):
+              """ Function to generate random metric """
+              feature_model_baseline_avg = 70
+              feature_model_variant_a_avg = 75
+              feature_model_variant_b_avg = 50
+          
+              percentage_variance = 25
+          
+              # Calculate a random value for the IoT payload depending on the feature
+              if feature == VARIANT_MODEL_BASELINE:
+                  random_metric_value = random.randint(
+                      feature_model_baseline_avg - int(
+                          percentage_variance / 100 * feature_model_baseline_avg
+                      ),
+                      feature_model_baseline_avg + int(
+                          percentage_variance / 100 * feature_model_baseline_avg
+                      )
+                  )
+              elif feature == VARIANT_MODEL_VARIANT_A:
+                  random_metric_value = random.randint(
+                      feature_model_variant_a_avg - int(
+                          percentage_variance / 100 * feature_model_variant_a_avg
+                      ),
+                      feature_model_variant_a_avg + int(
+                          percentage_variance / 100 * feature_model_variant_a_avg
+                      )
+                  )
+              elif feature == VARIANT_MODEL_VARIANT_B:
+                  random_metric_value = random.randint(
+                      feature_model_variant_b_avg - int(
+                          percentage_variance / 100 * feature_model_variant_b_avg
+                      ),
+                      feature_model_variant_b_avg + int(
+                          percentage_variance / 100 * feature_model_variant_b_avg
+                      )
+                  )
+              else:
+                  random_metric_value = 0
+              return random_metric_value
+          
+          def lambda_handler(event, context):
+              """ Lambda handler to iterate through devices """
+              thing_device = 1
+          
+              while thing_device <= DEVICE_COUNT:
+                  thing = THING_NAME + str(thing_device)
+                  try:
+                      # Get named shadow of thing with reported and desired feature flag values
+                      response = json.loads(client_iot.get_thing_shadow(
+                          thingName=thing,
+                          shadowName=DEVICE_SHADOW_NAME
+                      )['payload'].read())
+                      reported_feature = response['state']['reported']['myFeature']
+                      desired_feature = response['state']['desired']['myFeature']
+                  except client_iot.exceptions.ResourceNotFoundException:
+                      reported_feature = VARIANT_MODEL_BASELINE
+                      desired_feature = VARIANT_MODEL_BASELINE
+                  else:
+                      if reported_feature is not desired_feature:
+                          reported_feature = desired_feature
+                  payload = {
+                      'myFeature': reported_feature,
+                      'myMetric': generate_random_metric(reported_feature)
+                  }
+          
+                  # Publish the metric to the thing using the payload and the
+                  # feature allocated by Evidently
+                  response = client_iot.publish(
+                      topic=CFN_STACK + '/' + thing + '/myFeatures',
+                      payload=json.dumps(payload)
+                  )
+                  thing_device += 1
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps("Successfully generated device data!")
+              }
+
+      MemorySize: 128
+      Timeout: 300
+      Role: !GetAtt myEvidentlyLoadGenLambdaFunctionExecutionRole.Arn
+      Environment:
+        Variables:
+          THING_NAME:
+            Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          DEVICE_SHADOW_NAME: 'myFeatures'
+          DEVICE_COUNT: !Sub ${deviceCount}
+          CFN_STACK: !Sub '${stackName}'
+          VARIANT_MODEL_BASELINE:
+            Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-VariantModelBaseline'
+          VARIANT_MODEL_VARIANT_A:
+            Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-VariantModelVariantA'
+          VARIANT_MODEL_VARIANT_B:
+            Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-VariantModelVariantB'
+
+  myEvidentlyLoadGenLambdaFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref myEvidentlyLoadGenLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt myEvidentlyLoadGenScheduleRule.Arn
+
+  myEvidentlyLoadGenLambdaFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-myEvidentlyLoadGenLambdaFunctionRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-myEvidentlyLambdaFunctionPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-myEvidentlyLoadGenLambdaFunction:*'
+              - Effect: Allow
+                Action:
+                  - iot:Publish
+                Resource: !Join
+                  - ''
+                  - - !Sub 'arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/${stackName}/'
+                    - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+                    - '*/myFeatures'
+              - Effect: Allow
+                Action:
+                  - iot:GetThingShadow
+                Resource: !Join
+                  - ''
+                  - - !Sub 'arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:thing/'
+                    - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+                    - '*'
+
+  myEvidentlyLoadGenIoTThing1:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '1'
+  myEvidentlyLoadGenIoTThing2:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '2'
+  myEvidentlyLoadGenIoTThing3:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '3'
+  myEvidentlyLoadGenIoTThing4:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '4'
+  myEvidentlyLoadGenIoTThing5:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '5'
+  myEvidentlyLoadGenIoTThing6:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '6'
+  myEvidentlyLoadGenIoTThing7:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '7'
+  myEvidentlyLoadGenIoTThing8:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '8'
+  myEvidentlyLoadGenIoTThing9:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '9'
+  myEvidentlyLoadGenIoTThing10:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '10'
+  myEvidentlyLoadGenIoTThing11:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '11'
+  myEvidentlyLoadGenIoTThing12:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '12'
+  myEvidentlyLoadGenIoTThing13:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '13'
+  myEvidentlyLoadGenIoTThing14:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '14'
+  myEvidentlyLoadGenIoTThing15:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '15'
+  myEvidentlyLoadGenIoTThing16:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '16'
+  myEvidentlyLoadGenIoTThing17:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '17'
+  myEvidentlyLoadGenIoTThing18:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '18'
+  myEvidentlyLoadGenIoTThing19:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '19'
+  myEvidentlyLoadGenIoTThing20:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '20'
+  myEvidentlyLoadGenIoTThing21:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '21'
+  myEvidentlyLoadGenIoTThing22:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '22'
+  myEvidentlyLoadGenIoTThing23:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '23'
+  myEvidentlyLoadGenIoTThing24:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '24'
+  myEvidentlyLoadGenIoTThing25:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '25'
+  myEvidentlyLoadGenIoTThing26:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '26'
+  myEvidentlyLoadGenIoTThing27:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '27'
+  myEvidentlyLoadGenIoTThing28:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '28'
+  myEvidentlyLoadGenIoTThing29:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '29'
+  myEvidentlyLoadGenIoTThing30:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '30'
+  myEvidentlyLoadGenIoTThing31:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '31'
+  myEvidentlyLoadGenIoTThing32:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '32'
+  myEvidentlyLoadGenIoTThing33:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '33'
+  myEvidentlyLoadGenIoTThing34:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '34'
+  myEvidentlyLoadGenIoTThing35:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '35'
+  myEvidentlyLoadGenIoTThing36:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '36'
+  myEvidentlyLoadGenIoTThing37:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '37'
+  myEvidentlyLoadGenIoTThing38:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '38'
+  myEvidentlyLoadGenIoTThing39:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '39'
+  myEvidentlyLoadGenIoTThing40:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '40'
+  myEvidentlyLoadGenIoTThing41:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '41'
+  myEvidentlyLoadGenIoTThing42:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '42'
+  myEvidentlyLoadGenIoTThing43:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '43'
+  myEvidentlyLoadGenIoTThing44:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '44'
+  myEvidentlyLoadGenIoTThing45:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '45'
+  myEvidentlyLoadGenIoTThing46:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '46'
+  myEvidentlyLoadGenIoTThing47:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '47'
+  myEvidentlyLoadGenIoTThing48:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '48'
+  myEvidentlyLoadGenIoTThing49:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '49'
+  myEvidentlyLoadGenIoTThing50:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join
+        - ''
+        - - Fn::ImportValue: !Sub '${stackName}-EvidentlyIoT-ThingName'
+          - '50'
+  myEvidentlyLoadGenScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0/10 * * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt myEvidentlyLoadGenLambdaFunction.Arn
+          Id: !Sub '${AWS::StackName}-myEvidentlyLoadGenLambdaFunction'
