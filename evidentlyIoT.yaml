@@ -235,7 +235,7 @@ Resources:
 Outputs:
   outputSubscribeToThisTopic:
     Description: MQTT topic for this test device to subscribe to.
-    Value: '$aws/things/${AWS::StackName}-EvidentlyIoT-${thingName}/shadow/name/myFeatures/update/accepted'
+    Value: !Sub '$aws/things/${AWS::StackName}-EvidentlyIoT-${thingName}/shadow/name/myFeatures/update/accepted'
   outputPublishToThisTopic:
     Description: MQTT topic for this test device to publish to.
     Value: !Sub '${AWS::StackName}/${AWS::StackName}-EvidentlyIoT-${thingName}/myFeatures'
