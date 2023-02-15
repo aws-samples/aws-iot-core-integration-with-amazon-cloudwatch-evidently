@@ -240,7 +240,7 @@ Outputs:
     Description: MQTT topic for this test device to publish to.
     Value: !Sub '${AWS::StackName}/${AWS::StackName}-EvidentlyIoT-${thingName}/myFeatures'
   outputThingName:
-    Description: Thing name prefix used for devices.
+    Description: Thing name prefix used for devices. This is also the name of the test device.
     Value: !Sub '${AWS::StackName}-EvidentlyIoT-${thingName}'
     Export:
       Name: !Sub '${AWS::StackName}-EvidentlyIoT-ThingName'
