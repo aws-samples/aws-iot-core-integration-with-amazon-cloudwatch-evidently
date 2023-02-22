@@ -52,11 +52,11 @@ Resources:
           
           def generate_random_metric(feature):
               """ Function to generate random metric """
-              feature_model_baseline_avg = 70
-              feature_model_variant_a_avg = 75
-              feature_model_variant_b_avg = 50
+              feature_model_baseline_avg = 5
+              feature_model_variant_a_avg = 8
+              feature_model_variant_b_avg = 3
           
-              percentage_variance = 25
+              percentage_variance = 50
           
               # Calculate a random value for the IoT payload depending on the feature
               if feature == VARIANT_MODEL_BASELINE:
