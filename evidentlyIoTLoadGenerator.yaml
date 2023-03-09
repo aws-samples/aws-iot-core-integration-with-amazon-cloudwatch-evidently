@@ -11,6 +11,11 @@ Parameters:
     Type: Number
     Default: 50
     MaxValue: 50
+  loadInterval:
+    Description: Number of minutes between executions of the load generator function
+    Type: Number
+    Default: 10
+    MinValue: 1
 
 Resources:
   myEvidentlyLoadGenLambdaFunctionLogGroup:
@@ -550,7 +555,7 @@ Resources:
   myEvidentlyLoadGenScheduleRule:
     Type: AWS::Events::Rule
     Properties:
-      ScheduleExpression: cron(0/10 * * * ? *)
+      ScheduleExpression: !Sub cron(0/${loadInterval} * * * ? *)
       State: ENABLED
       Targets:
         - Arn: !GetAtt myEvidentlyLoadGenLambdaFunction.Arn
