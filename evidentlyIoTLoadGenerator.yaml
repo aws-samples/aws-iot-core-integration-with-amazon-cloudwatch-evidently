@@ -14,7 +14,7 @@ Parameters:
   loadInterval:
     Description: Number of minutes between executions of the load generator function
     Type: Number
-    Default: 10
+    Default: 1
     MinValue: 1
 
 Resources:
