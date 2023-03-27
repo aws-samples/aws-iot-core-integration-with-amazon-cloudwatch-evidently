@@ -39,12 +39,12 @@ Resources:
           """
           Load generator for AWS IoT Core to Amazon CloudWatch Evidently integration
           """
-          
+
           import os
           import json
           import random
           import boto3
-          
+
           client_iot = boto3.client('iot-data')
           THING_NAME = os.environ['THING_NAME']
           DEVICE_COUNT = int(os.environ['DEVICE_COUNT'])
@@ -53,16 +53,16 @@ Resources:
           VARIANT_MODEL_BASELINE = os.environ['VARIANT_MODEL_BASELINE']
           VARIANT_MODEL_VARIANT_A = os.environ['VARIANT_MODEL_VARIANT_A']
           VARIANT_MODEL_VARIANT_B = os.environ['VARIANT_MODEL_VARIANT_B']
-          
-          
+
+
           def generate_random_metric(feature):
               """ Function to generate random metric """
               feature_model_baseline_avg = 5
               feature_model_variant_a_avg = 8
               feature_model_variant_b_avg = 3
-          
+
               percentage_variance = 50
-          
+
               # Calculate a random value for the IoT payload depending on the feature
               if feature == VARIANT_MODEL_BASELINE:
                   random_metric_value = random.randint(
@@ -94,11 +94,11 @@ Resources:
               else:
                   random_metric_value = 0
               return random_metric_value
-          
+
           def lambda_handler(event, context):
               """ Lambda handler to iterate through devices """
               thing_device = 1
-          
+
               while thing_device <= DEVICE_COUNT:
                   thing = THING_NAME + str(thing_device)
                   try:
@@ -119,7 +119,7 @@ Resources:
                       'myFeature': reported_feature,
                       'myMetric': generate_random_metric(reported_feature)
                   }
-          
+
                   # Publish the metric to the thing using the payload and the
                   # feature allocated by Evidently
                   response = client_iot.publish(
@@ -160,7 +160,6 @@ Resources:
   myEvidentlyLoadGenLambdaFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${AWS::StackName}-myEvidentlyLoadGenLambdaFunctionRole'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:

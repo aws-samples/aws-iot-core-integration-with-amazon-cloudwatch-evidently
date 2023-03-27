@@ -103,19 +103,19 @@ Resources:
       Code:
         ZipFile: |
           """ AWS IoT Core to Amazon CloudWatch Evidently integration """
-  
+
           import os
           import json
           from datetime import datetime
           import boto3
-          
+
           client_iot = boto3.client('iot-data')
           client_evidently = boto3.client('evidently')
           EVIDENTLY_PROJECT = os.environ['EVIDENTLY_PROJECT']
           EVIDENTLY_FEATURE = os.environ['EVIDENTLY_FEATURE']
           DEVICE_SHADOW_NAME = os.environ['DEVICE_SHADOW_NAME']
-  
-  
+
+
           def lambda_handler(event, context):
               """ Lambda handler for AWS IoT Core to Amazon CloudWatch Evidently integration """
               thing_name = event['thingName']
@@ -131,14 +131,14 @@ Resources:
                   ],
                   project=EVIDENTLY_PROJECT
               )
-          
+
               # Retrieve assigned feature flag value from Evidently
               feature_flag = client_evidently.evaluate_feature(
                   entityId=thing_name,
                   project=EVIDENTLY_PROJECT,
                   feature=EVIDENTLY_FEATURE
               )['value']['stringValue']
-          
+
               # Update named shadow of thing with reported and desired feature flag values
               response = client_iot.update_thing_shadow(
                   thingName=thing_name,
@@ -178,7 +178,6 @@ Resources:
   myEvidentlyLambdaFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${AWS::StackName}-myEvidentlyLambdaFunctionRole'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -247,15 +246,15 @@ Outputs:
   outputVariantModelBaseline:
     Description: String value used to identify baseline variant in load generator Lambda.
     Value: !Sub '${variantModelBaseline}'
-    Export: 
+    Export:
       Name: !Sub '${AWS::StackName}-EvidentlyIoT-VariantModelBaseline'
   outputVariantModelVariantA:
     Description: String value used to identify variant A in load generator Lambda.
     Value: !Sub '${variantModelVariantA}'
-    Export: 
+    Export:
       Name: !Sub '${AWS::StackName}-EvidentlyIoT-VariantModelVariantA'
   outputVariantModelVariantB:
     Description: String value used to identify variant B in load generator Lambda.
     Value: !Sub '${variantModelVariantB}'
-    Export: 
+    Export:
       Name: !Sub '${AWS::StackName}-EvidentlyIoT-VariantModelVariantB'
