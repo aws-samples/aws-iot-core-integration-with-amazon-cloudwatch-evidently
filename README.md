@@ -4,7 +4,7 @@ This solution demonstrates how Amazon CloudWatch Evidently can be used with AWS 
 ## AWS Blog post
 The AWS blog post explaining how this solution works, and how to deploy the Amazon CloudFormation templates.
 
-//TODO: Link to blog post
+TODO: Link to blog post
 
 ## Amazon CloudFormation templates
 This repository provides the following Amazon CloudFormation templates used to provision the demo environment:
